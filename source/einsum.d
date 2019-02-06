@@ -28,58 +28,34 @@ unittest {
     // assert(m.indexLength!"ijj" == ['i': 1UL, 'j': 2UL]);
 }
 
-auto dim2index(dstring dim2dchar)(size_t[dchar] dchar2index) {
+pure nothrow dim2index(dstring dim2dchar, D2I)(const auto ref D2I dchar2index) {
     static if (dim2dchar.length == 0) {
         return tuple();
     }
     else {
-        return tuple(dchar2index[dim2dchar[0]],
+        return tuple(dchar2index.get!(dim2dchar[0]),
                      dim2index!(dim2dchar[1..$])(dchar2index).expand);
     }
 }
 
 unittest {
-    assert(dim2index!"iij"(['i': 1, 'j':2]) == tuple(1, 1, 2));
-    assert(dim2index!"i"(['i': 1, 'j':2]) == tuple(1));
+    assert(dim2index!"iij"(tuple!("i", "j")(1, 2)) == tuple(1, 1, 2));
+    assert(dim2index!"i"(tuple!("i", "j")(1, 2)) == tuple(1));
 }
 
-auto toTuple(T, size_t N)(const auto ref T[N] a) {
-    import std.typecons : tuple;
-    import std.format : format;
-    mixin({
-            auto ret = "return tuple(";
-            foreach (i; 0 .. N) {
-                ret ~=  "a[%d],".format(i);
-            }
-            return ret[0 .. $-1] ~ ");";
-        }());
-}
-
-@safe nothrow pure
-unittest {
-    static assert([1, 2, 3].toTuple == tuple(1, 2, 3));
-    static assert("abc".toTuple == tuple('a', 'b', 'c'));
-}
-
-auto shapeRanges(dstring dim2dchar, S)(S x) if (isSlice!S) {
-    import std.array : array;
-    import std.algorithm : sort, uniq, cartesianProduct, map;
-    static immutable dchars = dim2dchar.sort.uniq.array;
-    size_t[dchars.length] lens;
-    auto s = dim2index!dchars(x._lengths);
-    return cartesianProduct(x._lengths.expand); // .map!(t => tuple(t.expand));
-}
-
-unittest {
-    auto m = iota(1, 2, 3);
-    // writeln(m.shapeRanges!"ijk");
-}
 
 @safe struct Expr {
     dstring[] inputs;
     dstring output;
 
-    void validate() {
+    dstring inSymbols() pure const {
+        import std.string : join;
+        import std.algorithm : sort, uniq;
+        import std.conv : to;
+        return inputs.join.to!(dchar[]).sort.uniq.to!dstring;
+    }
+
+    void validate() pure const {
         import std.algorithm : canFind;
 
         foreach (o; output) {
@@ -95,7 +71,7 @@ unittest {
     }
 }
 
-@safe Expr tokenize(dstring s) {
+pure Expr tokenize(dstring s) {
     import std.algorithm : map, canFind;
     import std.array;
     import std.string;
@@ -160,33 +136,11 @@ ref get(alias key, T)(return ref T t) if (isTuple!T) {
     assert(t.get!'b' == 2);
 }
 
-
-/**
-TODO:
-- use swapped/transposed to sort indices
-- use opBinary to multiply tensors
-- use mir.math.sum to sum elements
-- use alongDim/byDim to return slice (unless scalar)
- */
-@safe auto einsum(string expr, S...)(S xs) {
-    import std.array : empty, join, array;
-    import std.algorithm : uniq, sort;
-    import std.conv : to;
-
-    static immutable tok = tokenize(expr.to!dstring);
-    // reduce to scalar
-    static if (tok.output.empty) {
-        alias x = xs[0];
-        static foreach (i; 0 .. S.length) {
-            static assert(isSlice!(S[i]));
-            static assert(tok.inputs[i].length == DimensionCount!(S[i]));
-        }
-
-        static immutable inSymbols = tok.inputs.join.to!(dchar[]).sort.uniq.to!dstring;
-
-        NamedArray!(size_t, inSymbols) lengths;
-        static foreach (narg, input; tok.inputs) {
-            static foreach (nsym, c; input) {{
+auto sym2len(Expr expr, S...)(S xs) {
+    static immutable inSymbols = expr.inSymbols;
+    NamedArray!(size_t, inSymbols) lengths;
+    static foreach (narg, input; expr.inputs) {
+        static foreach (nsym, c; input) {{
                 auto len = xs[narg].length!nsym;
                 if (lengths.get!c != 0) {
                     assert(lengths.get!c == len);
@@ -195,27 +149,49 @@ TODO:
                     lengths.get!c = len;
                 }
             }}
-        }
+    }
+    return lengths;
+}
 
-        // TODO replace idx with tuple
-        size_t[dchar] idx;
+
+/**
+TODO: support output tensor (not only scalar)
+- use swapped/transposed to sort indices
+- use opBinary to multiply tensors
+- use mir.math.sum to sum elements
+- use alongDim/byDim to return slice (unless scalar)
+ */
+auto einsum(string expr, S...)(S xs) {
+    import std.range : empty;
+    import std.conv : to;
+
+    static immutable tok = tokenize(expr.to!dstring);
+    static foreach (i; 0 .. S.length) {
+        static assert(isSlice!(S[i]));
+        static assert(tok.inputs[i].length == DimensionCount!(S[i]));
+    }
+
+    // reduce to scalar
+    static if (tok.output.empty) {
+        auto lengths = sym2len!tok(xs);
+        static immutable inSymbols = tok.inSymbols;
+        NamedArray!(size_t, inSymbols) idx;
         DeepElementType!(S[0]) ret = 0;
+
         mixin({
                 string s;
                 // open nested foreach
-                static foreach (c; inSymbols) {
+                static foreach (c; inSymbols) {{
                     s ~= format!`
                     foreach (_nested_%s; 0 .. lengths.%s) {
-                        idx['%s'] = _nested_%s;`(c, c, c, c);
-                }
+                        idx.%s = _nested_%s;`(c, c, c, c);
+                }}
                 // most inner statement
-                s ~= `
-                        typeof(ret) tmp = 1;
+                s ~= `  typeof(ret) tmp = 1;
                         static foreach (_inner_i; 0 .. S.length) {
                             tmp *= xs[_inner_i][dim2index!(tok.inputs[_inner_i])(idx).expand];
                         }
-                        ret += tmp;
-                `;
+                        ret += tmp;`;
                 // close nested foreach
                 static foreach (c; inSymbols) {
                     s ~= "}";
@@ -232,10 +208,9 @@ TODO:
 /// https://docs.scipy.org/doc/numpy/reference/generated/numpy.einsum.html
 
 /// trace and scalar reduction
-@safe pure nothrow unittest
+@nogc @safe pure nothrow unittest
 {
     auto m = iota(5, 5);
-    // writeln(m);
     assert(m.einsum!"ii" == 60);
     assert(m.einsum!"ああ" == 60);
     assert(m.einsum!"ij->" == 300);
