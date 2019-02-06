@@ -1,0 +1,12 @@
+{
+	"authors": [
+		"karita"
+	],
+	"copyright": "mir-algorithm",
+	"dependencies": {
+		"mir-algorithm": "~>3.3.8"
+	},
+	"description": "Einsum Implementation for Mir",
+	"license": "BSL-1.0",
+	"name": "mir-einsum"
+}
