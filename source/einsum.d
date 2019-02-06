@@ -2,31 +2,10 @@ module einsum;
 
 @safe:
 
-import std.stdio;
-import mir.ndslice;
-import mir.primitives : DimensionCount;
-import std.typecons : tuple, isTuple;
+import mir.ndslice.slice : isSlice;
+import std.typecons : isTuple, tuple;
 import std.format : format;
-static import stri;
 
-size_t[dchar] indexLength(dstring indices, S)(S x) if (isSlice!S) {
-    static assert(indices.length == DimensionCount!S);
-    size_t[dchar] ret;
-    static foreach (dim, i; indices) {
-        if (i in ret) {
-            assert(ret[i] == x.length!dim, "index/length mismatch");
-        }
-        else {
-            ret[i] = x.length!dim;
-        }
-    }
-    return ret;
-}
-
-unittest {
-    auto m = iota(1, 2, 2);
-    // assert(m.indexLength!"ijj" == ['i': 1UL, 'j': 2UL]);
-}
 
 pure nothrow dim2index(dstring dim2dchar, D2I)(const auto ref D2I dchar2index) {
     static if (dim2dchar.length == 0) {
@@ -162,6 +141,7 @@ TODO: support output tensor (not only scalar)
 - use alongDim/byDim to return slice (unless scalar)
  */
 auto einsum(string expr, S...)(S xs) {
+    import mir.primitives : DimensionCount;
     import std.range : empty;
     import std.conv : to;
 
@@ -173,6 +153,7 @@ auto einsum(string expr, S...)(S xs) {
 
     // reduce to scalar
     static if (tok.output.empty) {
+        import mir.ndslice.slice : DeepElementType;
         auto lengths = sym2len!tok(xs);
         static immutable inSymbols = tok.inSymbols;
         NamedArray!(size_t, inSymbols) idx;
@@ -210,6 +191,7 @@ auto einsum(string expr, S...)(S xs) {
 /// trace and scalar reduction
 @nogc @safe pure nothrow unittest
 {
+    import mir.ndslice : iota;
     auto m = iota(5, 5);
     assert(m.einsum!"ii" == 60);
     assert(m.einsum!"ああ" == 60);

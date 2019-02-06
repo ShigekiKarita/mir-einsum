@@ -1,13 +1,13 @@
 {
-  "authors": [
-    "karita"
-  ],
-  "copyright": "mir-algorithm",
-  "dependencies": {
-      "mir-algorithm": "~>3.3.8",
-      "stri": "~>0.0.2"
-  },
-  "description": "Einsum Implementation for Mir",
-  "license": "BSL-1.0",
-  "name": "mir-einsum"
+    "authors": [
+        "Shigeki Karita"
+    ],
+    "copyright": "Copyright 2019 Shigeki Karita",
+    "dependencies": {
+        "mir-algorithm": "~>3.3.8"
+    },
+    "dflags": ["-dip25", "-dip1000", "-dip1008"],
+    "description": "Einsum Implementation for Mir",
+    "license": "BSL-1.0",
+    "name": "mir-einsum"
 }
