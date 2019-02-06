@@ -6,23 +6,24 @@ import mir.ndslice.slice : isSlice;
 import std.typecons : isTuple, tuple;
 import std.format : format;
 
-
-pure nothrow dim2index(dstring dim2dchar, D2I)(const auto ref D2I dchar2index) {
-    static if (dim2dchar.length == 0) {
+/// register index integer on dim2sym from given sym2index mapping
+pure nothrow dim2index(dstring dim2sym, T)(T sym2index) if (isTuple!T) {
+    static if (dim2sym.length == 0) {
         return tuple();
     }
     else {
-        return tuple(dchar2index.get!(dim2dchar[0]),
-                     dim2index!(dim2dchar[1..$])(dchar2index).expand);
+        return tuple(sym2index.get!(dim2sym[0]),
+                     dim2index!(dim2sym[1..$])(sym2index).expand);
     }
 }
 
-unittest {
+///
+@nogc pure nothrow unittest {
     assert(dim2index!"iij"(tuple!("i", "j")(1, 2)) == tuple(1, 1, 2));
     assert(dim2index!"i"(tuple!("i", "j")(1, 2)) == tuple(1));
 }
 
-
+/// parsed result of einsum expression
 @safe struct Expr {
     dstring[] inputs;
     dstring output;
@@ -50,10 +51,12 @@ unittest {
     }
 }
 
-pure Expr tokenize(dstring s) {
+/// parse einsum expression
+pure Expr parse(dstring s) {
     import std.algorithm : map, canFind;
-    import std.array;
-    import std.string;
+    import std.array : array;
+    import std.string : join, strip, empty, split;
+
     assert(!s.empty, "empty expr is invalid in einsum.");
     auto sp = s.split("->");
     assert(sp.length <= 2, "multiple -> is not supported in einsum");
@@ -71,13 +74,14 @@ pure Expr tokenize(dstring s) {
     return ret;
 }
 
-unittest {
-    assert(tokenize("ij") == Expr(["ij"]));
-    assert(tokenize("ij,ji") == Expr(["ij", "ji"]));
-    assert(tokenize("ij,jk->ki") == Expr(["ij", "jk"], "ki"));
+///
+pure unittest {
+    assert(parse("ij") == Expr(["ij"]));
+    assert(parse("ij,ji") == Expr(["ij", "ji"]));
+    assert(parse("ij,jk->ki") == Expr(["ij", "jk"], "ki"));
 }
 
-
+/// create tuple only has type T fields with given names
 template NamedArray(T, alias names) {
     import std.typecons : Tuple;
     mixin(
@@ -91,7 +95,8 @@ template NamedArray(T, alias names) {
         );
 }
 
-unittest {
+///
+pure nothrow unittest {
     NamedArray!(int, "abcあ"d) x;
     assert(x.a == 0);
     x.a = 1;
@@ -100,13 +105,15 @@ unittest {
     NamedArray!(int, ["a", "あ"]) y;
     y.a = 1;
     y.あ = 2;
+    assert(y == tuple!("a", "あ")(1, 2));
 }
 
+/// `tuple.get!"field"` is equivalent to `tuple.field`
 ref get(alias key, T)(return ref T t) if (isTuple!T) {
     mixin(format!"return t.%s;"(key));
 }
 
-@safe unittest {
+pure nothrow unittest {
     auto t = tuple!("a", "b")(1, 2);
     assert(t.get!"a" == 1);
     assert(t.get!'a' == 1);
@@ -115,6 +122,7 @@ ref get(alias key, T)(return ref T t) if (isTuple!T) {
     assert(t.get!'b' == 2);
 }
 
+/// accumulate lengths from slice by given symbols in expr
 auto sym2len(Expr expr, S...)(S xs) {
     static immutable inSymbols = expr.inSymbols;
     NamedArray!(size_t, inSymbols) lengths;
@@ -132,6 +140,13 @@ auto sym2len(Expr expr, S...)(S xs) {
     return lengths;
 }
 
+///
+pure nothrow unittest {
+    import mir.ndslice : iota;
+    static immutable expr = parse("iij");
+    auto m = iota(2, 2, 3);
+    assert(m.sym2len!expr == tuple!("i", "j")(2, 3));
+}
 
 /**
 TODO: support output tensor (not only scalar)
@@ -145,7 +160,7 @@ auto einsum(string expr, S...)(S xs) {
     import std.range : empty;
     import std.conv : to;
 
-    static immutable tok = tokenize(expr.to!dstring);
+    static immutable tok = parse(expr.to!dstring);
     static foreach (i; 0 .. S.length) {
         static assert(isSlice!(S[i]));
         static assert(tok.inputs[i].length == DimensionCount!(S[i]));
@@ -189,7 +204,7 @@ auto einsum(string expr, S...)(S xs) {
 /// https://docs.scipy.org/doc/numpy/reference/generated/numpy.einsum.html
 
 /// trace and scalar reduction
-@nogc @safe pure nothrow unittest
+@nogc pure nothrow unittest
 {
     import mir.ndslice : iota;
     auto m = iota(5, 5);
