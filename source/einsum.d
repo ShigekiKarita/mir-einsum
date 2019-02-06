@@ -1,9 +1,11 @@
 module einsum;
 
+@safe:
+
 import std.stdio;
 import mir.ndslice;
 import mir.primitives : DimensionCount;
-import std.typecons : tuple;
+import std.typecons : tuple, isTuple;
 import std.format : format;
 static import stri;
 
@@ -120,6 +122,45 @@ unittest {
     assert(tokenize("ij,jk->ki") == Expr(["ij", "jk"], "ki"));
 }
 
+
+template NamedArray(T, alias names) {
+    import std.typecons : Tuple;
+    mixin(
+        {
+            string ret = "alias NamedArray = Tuple!(";
+            foreach (n; names) {
+                ret ~= format!"T, \"%s\","(n);
+            }
+            return ret[0 .. $-1] ~ ");";
+        }()
+        );
+}
+
+unittest {
+    NamedArray!(int, "abcあ"d) x;
+    assert(x.a == 0);
+    x.a = 1;
+    x.あ = 2;
+
+    NamedArray!(int, ["a", "あ"]) y;
+    y.a = 1;
+    y.あ = 2;
+}
+
+ref get(alias key, T)(return ref T t) if (isTuple!T) {
+    mixin(format!"return t.%s;"(key));
+}
+
+@safe unittest {
+    auto t = tuple!("a", "b")(1, 2);
+    assert(t.get!"a" == 1);
+    assert(t.get!'a' == 1);
+    t.get!"a" = 3;
+    assert(t.a == 3);
+    assert(t.get!'b' == 2);
+}
+
+
 /**
 TODO:
 - use swapped/transposed to sort indices
@@ -141,21 +182,20 @@ TODO:
             static assert(tok.inputs[i].length == DimensionCount!(S[i]));
         }
 
-        static immutable inSymbols = sort(tok.inputs.join.to!(dchar[])).uniq.to!dstring;
-        // TODO replace lengths with tuple
-        size_t[dchar] lengths;
+        static immutable inSymbols = tok.inputs.join.to!(dchar[]).sort.uniq.to!dstring;
+
+        NamedArray!(size_t, inSymbols) lengths;
         static foreach (narg, input; tok.inputs) {
             static foreach (nsym, c; input) {{
                 auto len = xs[narg].length!nsym;
-                if (c in lengths) {
-                    assert(lengths[c] == len);
+                if (lengths.get!c != 0) {
+                    assert(lengths.get!c == len);
                 }
                 else {
-                    lengths[c] = len;
+                    lengths.get!c = len;
                 }
             }}
         }
-        // auto lengths = x.indexLength!inDim2Dchar;
 
         // TODO replace idx with tuple
         size_t[dchar] idx;
@@ -165,7 +205,7 @@ TODO:
                 // open nested foreach
                 static foreach (c; inSymbols) {
                     s ~= format!`
-                    foreach (_nested_%s; 0 .. lengths['%s']) {
+                    foreach (_nested_%s; 0 .. lengths.%s) {
                         idx['%s'] = _nested_%s;`(c, c, c, c);
                 }
                 // most inner statement
@@ -197,10 +237,12 @@ TODO:
     auto m = iota(5, 5);
     // writeln(m);
     assert(m.einsum!"ii" == 60);
+    assert(m.einsum!"ああ" == 60);
     assert(m.einsum!"ij->" == 300);
     assert(m.einsum!"ji->" == 300);
     assert(einsum!"ii,jj->"(m, m) == 3600);
     assert(einsum!"ii,jk->"(m, m) == 18000);
     assert(einsum!"ii,ij->"(m, m) == 5100);
     assert(einsum!"ii,ji->"(m, m) == 3900);
+    assert(einsum!"ああ,iあ->"(m, m) == 3900);
 }
