@@ -1,0 +1,10 @@
+*
+
+!*/
+!*.d
+!*.md
+
+!dub.json
+!.gitignore
+
+.dub

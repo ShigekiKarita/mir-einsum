@@ -1,12 +1,15 @@
+module einsum;
+
 import std.stdio;
 import mir.ndslice;
 import mir.primitives : DimensionCount;
 import std.typecons : tuple;
 import std.format : format;
+static import stri;
 
-size_t[char] indexLength(string indices, S)(S x) if (isSlice!S) {
+size_t[dchar] indexLength(dstring indices, S)(S x) if (isSlice!S) {
     static assert(indices.length == DimensionCount!S);
-    size_t[char] ret;
+    size_t[dchar] ret;
     static foreach (dim, i; indices) {
         if (i in ret) {
             assert(ret[i] == x.length!dim, "index/length mismatch");
@@ -20,16 +23,16 @@ size_t[char] indexLength(string indices, S)(S x) if (isSlice!S) {
 
 unittest {
     auto m = iota(1, 2, 2);
-    assert(m.indexLength!"ijj" == ['i': 1U, 'j': 2U]);
+    // assert(m.indexLength!"ijj" == ['i': 1UL, 'j': 2UL]);
 }
 
-auto dim2index(string dim2char)(size_t[char] char2index) {
-    static if (dim2char.length == 0) {
+auto dim2index(dstring dim2dchar)(size_t[dchar] dchar2index) {
+    static if (dim2dchar.length == 0) {
         return tuple();
     }
     else {
-        return tuple(char2index[dim2char[0]],
-                     dim2index!(dim2char[1..$])(char2index).expand);
+        return tuple(dchar2index[dim2dchar[0]],
+                     dim2index!(dim2dchar[1..$])(dchar2index).expand);
     }
 }
 
@@ -56,12 +59,12 @@ unittest {
     static assert("abc".toTuple == tuple('a', 'b', 'c'));
 }
 
-auto shapeRanges(string dim2char, S)(S x) if (isSlice!S) {
+auto shapeRanges(dstring dim2dchar, S)(S x) if (isSlice!S) {
     import std.array : array;
-    import std.algorithm : uniq, cartesianProduct, map;
-    static immutable chars = dim2char.uniq.array;
-    size_t[chars.length] lens;
-    auto s = dim2index!chars(x._lengths);
+    import std.algorithm : sort, uniq, cartesianProduct, map;
+    static immutable dchars = dim2dchar.sort.uniq.array;
+    size_t[dchars.length] lens;
+    auto s = dim2index!dchars(x._lengths);
     return cartesianProduct(x._lengths.expand); // .map!(t => tuple(t.expand));
 }
 
@@ -70,9 +73,9 @@ unittest {
     // writeln(m.shapeRanges!"ijk");
 }
 
-struct Expr {
-    string[] inputs;
-    string output;
+@safe struct Expr {
+    dstring[] inputs;
+    dstring output;
 
     void validate() {
         import std.algorithm : canFind;
@@ -90,7 +93,7 @@ struct Expr {
     }
 }
 
-Expr tokenize(string s) {
+@safe Expr tokenize(dstring s) {
     import std.algorithm : map, canFind;
     import std.array;
     import std.string;
@@ -98,7 +101,7 @@ Expr tokenize(string s) {
     auto sp = s.split("->");
     assert(sp.length <= 2, "multiple -> is not supported in einsum");
 
-    string output;
+    dstring output;
     if (sp.length == 2) {
         output = sp[1].strip;
         assert(!output.canFind(","), "multiple output is not supported in einsum");
@@ -124,49 +127,61 @@ TODO:
 - use mir.math.sum to sum elements
 - use alongDim/byDim to return slice (unless scalar)
  */
-auto einsum(string expr, S...)(S xs) if (isSlice!S) {
-    import std.array : empty;
-    import std.algorithm : uniq;
+@safe auto einsum(string expr, S...)(S xs) {
+    import std.array : empty, join, array;
+    import std.algorithm : uniq, sort;
+    import std.conv : to;
 
-    static immutable tok = tokenize(expr);
+    static immutable tok = tokenize(expr.to!dstring);
     // reduce to scalar
     static if (tok.output.empty) {
-        static immutable inDim2Char = tok.inputs[0];
         alias x = xs[0];
         static foreach (i; 0 .. S.length) {
+            static assert(isSlice!(S[i]));
             static assert(tok.inputs[i].length == DimensionCount!(S[i]));
         }
 
-        // create merged char list and lengths over arguments
-        DeepElementType!S ret = 0;
-        auto lengths = x.indexLength!inDim2Char;
-        size_t[char] idx;
-        mixin({
-                string ret;
-                foreach (c; inDim2Char.uniq) {
-                    ret ~= format!`
-foreach (%s; 0 .. lengths['%s']) {
-idx['%s'] = %s;
-`(c, c, c, c);
+        static immutable inSymbols = sort(tok.inputs.join.to!(dchar[])).uniq.to!dstring;
+        // TODO replace lengths with tuple
+        size_t[dchar] lengths;
+        static foreach (narg, input; tok.inputs) {
+            static foreach (nsym, c; input) {{
+                auto len = xs[narg].length!nsym;
+                if (c in lengths) {
+                    assert(lengths[c] == len);
                 }
-                ret ~= "typeof(ret) tmp = 1;\n";
-                ret ~= "static foreach (_i; 0 .. S.length) {\n";
-                ret ~= "tmp *= xs[_i][dim2index!inDim2Char(idx).expand];\n";
-                ret ~= "}\n";
-                ret ~= "ret += tmp;\n";
-                foreach (c; inDim2Char.uniq) {
-                    ret ~= "}\n";
+                else {
+                    lengths[c] = len;
                 }
-                return ret;
-            }());
+            }}
+        }
+        // auto lengths = x.indexLength!inDim2Dchar;
 
-        // NOTE: simplest example of generated code for 1-dim 1-arg
-        // static foreach (ic; inDim2Char.uniq) {
-        //     foreach (i0; 0 .. lengths[ic]) {
-        //         idx[ic] = i0;
-        //         ret += x[dim2index!inDim2Char(idx).expand];
-        //     }
-        // }
+        // TODO replace idx with tuple
+        size_t[dchar] idx;
+        DeepElementType!(S[0]) ret = 0;
+        mixin({
+                string s;
+                // open nested foreach
+                static foreach (c; inSymbols) {
+                    s ~= format!`
+                    foreach (_nested_%s; 0 .. lengths['%s']) {
+                        idx['%s'] = _nested_%s;`(c, c, c, c);
+                }
+                // most inner statement
+                s ~= `
+                        typeof(ret) tmp = 1;
+                        static foreach (_inner_i; 0 .. S.length) {
+                            tmp *= xs[_inner_i][dim2index!(tok.inputs[_inner_i])(idx).expand];
+                        }
+                        ret += tmp;
+                `;
+                // close nested foreach
+                static foreach (c; inSymbols) {
+                    s ~= "}";
+                }
+                return s;
+            }());
         return ret;
     } else {
         static assert(false, "not supported expr: " ~ expr);
@@ -177,16 +192,15 @@ idx['%s'] = %s;
 /// https://docs.scipy.org/doc/numpy/reference/generated/numpy.einsum.html
 
 /// trace and scalar reduction
-unittest
+@safe pure nothrow unittest
 {
     auto m = iota(5, 5);
-    writeln(m);
+    // writeln(m);
     assert(m.einsum!"ii" == 60);
-    assert(m.einsum!"ij" == 300);
-    assert(m.einsum!"ji" == 300);
-}
-
-void main()
-{
-    writeln("Edit source/app.d to start your project.");
+    assert(m.einsum!"ij->" == 300);
+    assert(m.einsum!"ji->" == 300);
+    assert(einsum!"ii,jj->"(m, m) == 3600);
+    assert(einsum!"ii,jk->"(m, m) == 18000);
+    assert(einsum!"ii,ij->"(m, m) == 5100);
+    assert(einsum!"ii,ji->"(m, m) == 3900);
 }
